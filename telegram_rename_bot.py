@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8821222065:AAEdsY1T3RiVeLL5Wx1q43zkjtAf7LiG4N8")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # Conversation states
 WAITING_FOR_NAME = 1
