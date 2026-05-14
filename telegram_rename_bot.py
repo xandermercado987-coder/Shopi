@@ -1,27 +1,15 @@
 """
-Telegram File Renamer Bot
-=========================
-Allows users to send any file and rename it via a simple chat flow.
-
-Setup:
-  1. pip install python-telegram-bot==20.7
-  2. Create a bot via @BotFather on Telegram and get your token.
-  3. Set the token below (BOT_TOKEN) or use an environment variable.
-  4. Run: python telegram_rename_bot.py
-
-Usage (in Telegram):
-  /start  – Welcome message
-  /help   – Instructions
-  Send any file → bot asks for the new name → bot sends back the renamed file
+Telegram File Renamer Bot - Railway Compatible
 """
 
 import os
+import sys
 import logging
 import tempfile
 import shutil
 from pathlib import Path
 
-from telegram import Update, Document
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -32,7 +20,7 @@ from telegram.ext import (
 )
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8821222065:AAEdsY1T3RiVeLL5Wx1q43zkjtAf7LiG4N8")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # Conversation states
 WAITING_FOR_NAME = 1
@@ -41,21 +29,21 @@ WAITING_FOR_NAME = 1
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
+    stream=sys.stdout,  # Railway reads stdout logs
 )
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def get_extension(file_name: str) -> str:
-    """Return the file extension including the dot, e.g. '.pdf'"""
-    return Path(file_name).suffix  # keeps original extension
+    return Path(file_name).suffix
 
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 *Welcome to File Renamer Bot!*\n\n"
-        "Send me any file (document, photo, video, audio…) and I'll help you rename it.\n\n"
+        "Send me any file and I'll help you rename it.\n\n"
         "Type /help for instructions.",
         parse_mode="Markdown",
     )
@@ -64,116 +52,112 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "📖 *How to use:*\n\n"
-        "1️⃣ Send me a file (as a *Document* for best results).\n"
+        "1️⃣ Send me a file as a *Document*.\n"
         "2️⃣ I'll ask you for the new filename.\n"
         "3️⃣ Type the new name (with or without extension).\n"
-        "4️⃣ I'll send the file back with the new name! ✅\n\n"
+        "4️⃣ I'll send the file back renamed! ✅\n\n"
         "💡 *Tips:*\n"
         "• If you omit the extension, the original one is kept.\n"
-        "• Type /cancel at any time to abort.\n"
-        "• Photos are sent as documents to preserve the filename.",
+        "• Type /cancel at any time to abort.",
         parse_mode="Markdown",
     )
 
 
 async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Triggered when the user sends a file.
-    Stores file info in user_data and asks for the new name.
-    """
     message = update.message
 
-    # Determine which kind of attachment was sent
-    if message.document:
-        file_obj = message.document
-        original_name = file_obj.file_name or "file"
-        file_id = file_obj.file_id
-        file_type = "document"
-    elif message.audio:
-        file_obj = message.audio
-        original_name = file_obj.file_name or (file_obj.title or "audio") + ".mp3"
-        file_id = file_obj.file_id
-        file_type = "audio"
-    elif message.video:
-        file_obj = message.video
-        original_name = file_obj.file_name or "video.mp4"
-        file_id = file_obj.file_id
-        file_type = "video"
-    elif message.photo:
-        # Photos: take the highest resolution
-        file_obj = message.photo[-1]
-        original_name = "photo.jpg"
-        file_id = file_obj.file_id
-        file_type = "photo"
-    elif message.voice:
-        file_obj = message.voice
-        original_name = "voice.ogg"
-        file_id = file_obj.file_id
-        file_type = "voice"
-    elif message.video_note:
-        file_obj = message.video_note
-        original_name = "video_note.mp4"
-        file_id = file_obj.file_id
-        file_type = "video_note"
-    else:
-        await message.reply_text("⚠️ I can only rename files, documents, photos, audio, and videos.")
+    try:
+        if message.document:
+            file_obj = message.document
+            original_name = file_obj.file_name or "file"
+            file_id = file_obj.file_id
+        elif message.audio:
+            file_obj = message.audio
+            original_name = file_obj.file_name or (file_obj.title or "audio") + ".mp3"
+            file_id = file_obj.file_id
+        elif message.video:
+            file_obj = message.video
+            original_name = file_obj.file_name or "video.mp4"
+            file_id = file_obj.file_id
+        elif message.photo:
+            file_obj = message.photo[-1]
+            original_name = "photo.jpg"
+            file_id = file_obj.file_id
+        elif message.voice:
+            file_obj = message.voice
+            original_name = "voice.ogg"
+            file_id = file_obj.file_id
+        elif message.video_note:
+            file_obj = message.video_note
+            original_name = "video_note.mp4"
+            file_id = file_obj.file_id
+        else:
+            await message.reply_text("⚠️ Please send a file, document, photo, audio, or video.")
+            return ConversationHandler.END
+
+        context.user_data["file_id"] = file_id
+        context.user_data["original_name"] = original_name
+
+        extension = get_extension(original_name)
+        await message.reply_text(
+            f"📁 Got it! Original filename: `{original_name}`\n\n"
+            f"✏️ Please type the *new filename*.\n"
+            f"_(Extension `{extension or 'none'}` will be kept if you don't include one.)_\n\n"
+            f"Type /cancel to abort.",
+            parse_mode="Markdown",
+        )
+        return WAITING_FOR_NAME
+
+    except Exception as e:
+        logger.error("Error in receive_file: %s", e)
+        await message.reply_text("❌ Something went wrong. Please try again.")
         return ConversationHandler.END
-
-    # Save info for the next step
-    context.user_data["file_id"] = file_id
-    context.user_data["original_name"] = original_name
-    context.user_data["file_type"] = file_type
-
-    extension = get_extension(original_name)
-    await message.reply_text(
-        f"📁 Got it! Original filename: `{original_name}`\n\n"
-        f"✏️ Please type the *new filename*.\n"
-        f"_(Extension `{extension or 'none'}` will be kept if you don't include one.)_\n\n"
-        f"Type /cancel to abort.",
-        parse_mode="Markdown",
-    )
-    return WAITING_FOR_NAME
 
 
 async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    Triggered after the user types the new filename.
-    Downloads the stored file, renames it, and sends it back.
-    """
     new_name_raw = update.message.text.strip()
 
     if not new_name_raw:
         await update.message.reply_text("⚠️ Name cannot be empty. Please try again or /cancel.")
         return WAITING_FOR_NAME
 
+    # Guard: session expired after bot restart
+    if "file_id" not in context.user_data:
+        await update.message.reply_text("⚠️ Session expired. Please send the file again.")
+        return ConversationHandler.END
+
     original_name: str = context.user_data["original_name"]
     file_id: str = context.user_data["file_id"]
 
-    # Build the final filename (preserve extension if user didn't supply one)
+    # Build final filename
     original_ext = get_extension(original_name)
     new_ext = get_extension(new_name_raw)
-    if new_ext:
-        final_name = new_name_raw          # user supplied an extension
-    else:
-        final_name = new_name_raw + original_ext  # append original extension
+    final_name = new_name_raw if new_ext else new_name_raw + original_ext
 
-    # Sanitise filename (remove path separators)
-    final_name = final_name.replace("/", "_").replace("\\", "_")
+    # Sanitise
+    final_name = (
+        final_name
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace("..", "_")
+        .strip()
+    )
+
+    if not final_name:
+        await update.message.reply_text("⚠️ Invalid filename. Please try again or /cancel.")
+        return WAITING_FOR_NAME
 
     await update.message.reply_text(f"⏳ Renaming to `{final_name}`…", parse_mode="Markdown")
 
-    # Download the file into a temp directory
     tmp_dir = tempfile.mkdtemp()
     try:
         tg_file = await context.bot.get_file(file_id)
         download_path = os.path.join(tmp_dir, "original_file")
         await tg_file.download_to_drive(download_path)
 
-        # Copy to the final filename path
         final_path = os.path.join(tmp_dir, final_name)
         shutil.copy2(download_path, final_path)
 
-        # Send the renamed file back as a document
         with open(final_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
@@ -181,6 +165,8 @@ async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 caption=f"✅ Here is your renamed file: `{final_name}`",
                 parse_mode="Markdown",
             )
+        logger.info("File renamed: %s → %s", original_name, final_name)
+
     except Exception as e:
         logger.error("Error during rename: %s", e)
         await update.message.reply_text(
@@ -188,36 +174,45 @@ async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        context.user_data.clear()
 
-    # Clear user data
-    context.user_data.clear()
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("❌ Operation cancelled. Send me a file whenever you're ready!")
+    await update.message.reply_text("❌ Cancelled. Send me a file whenever you're ready!")
     return ConversationHandler.END
 
 
-async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🤔 I didn't understand that. Send me a file to rename, or type /help."
+        "🤔 Please send me a file to rename, or type /help."
     )
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Unhandled error: %s", context.error)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main() -> None:
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        raise ValueError(
-            "Please set your bot token!\n"
-            "  • Edit BOT_TOKEN in this file, OR\n"
-            "  • Set the TELEGRAM_BOT_TOKEN environment variable."
-        )
+    if not BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN is not set! Add it in Railway Variables.")
+        sys.exit(1)
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    logger.info("Starting bot...")
 
-    # Conversation: file → new name → done
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
+
     conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(
@@ -237,15 +232,21 @@ def main() -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True,
+        per_chat=True,
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text))
+    app.add_error_handler(error_handler)
 
-    logger.info("Bot is running… Press Ctrl+C to stop.")
-    app.run_polling()
+    logger.info("Bot is running!")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,  # ignore messages sent while bot was offline
+        close_loop=False,
+    )
 
 
 if __name__ == "__main__":
