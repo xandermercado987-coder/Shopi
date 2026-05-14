@@ -31,7 +31,7 @@ from telegram.ext import (
 )
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "8821222065:AAEdsY1T3RiVeLL5Wx1q43zkjtAf7LiG4N8")
 
 # Railway injects PORT when using webhook/web service mode.
 # If PORT is set we switch to webhook; otherwise we use polling.
