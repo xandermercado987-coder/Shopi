@@ -1,12 +1,14 @@
 """
-Telegram File Renamer Bot - Railway Compatible
+Telegram File Renamer Bot - Railway Compatible (Multi-User Fixed)
 """
 
 import os
 import sys
+import asyncio
 import logging
 import tempfile
 import shutil
+import signal
 from pathlib import Path
 
 from telegram import Update
@@ -29,7 +31,7 @@ WAITING_FOR_NAME = 1
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
-    stream=sys.stdout,  # Railway reads stdout logs
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,14 @@ logger = logging.getLogger(__name__)
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def get_extension(file_name: str) -> str:
     return Path(file_name).suffix
+
+
+def sanitize_filename(name: str) -> str:
+    """Remove characters unsafe for filenames."""
+    for ch in ("/", "\\", ":", "*", "?", '"', "<", ">", "|"):
+        name = name.replace(ch, "_")
+    name = name.replace("..", "_").strip()
+    return name
 
 
 # ── Handlers ───────────────────────────────────────────────────────────────────
@@ -95,6 +105,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             await message.reply_text("⚠️ Please send a file, document, photo, audio, or video.")
             return ConversationHandler.END
 
+        # Store per-user state in user_data (isolated per user automatically)
         context.user_data["file_id"] = file_id
         context.user_data["original_name"] = original_name
 
@@ -109,7 +120,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return WAITING_FOR_NAME
 
     except Exception as e:
-        logger.error("Error in receive_file: %s", e)
+        logger.error("Error in receive_file (user=%s): %s", update.effective_user.id, e)
         await message.reply_text("❌ Something went wrong. Please try again.")
         return ConversationHandler.END
 
@@ -123,7 +134,9 @@ async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Guard: session expired after bot restart
     if "file_id" not in context.user_data:
-        await update.message.reply_text("⚠️ Session expired. Please send the file again.")
+        await update.message.reply_text(
+            "⚠️ Session expired (bot may have restarted). Please send the file again."
+        )
         return ConversationHandler.END
 
     original_name: str = context.user_data["original_name"]
@@ -133,17 +146,9 @@ async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     original_ext = get_extension(original_name)
     new_ext = get_extension(new_name_raw)
     final_name = new_name_raw if new_ext else new_name_raw + original_ext
+    final_name = sanitize_filename(final_name)
 
-    # Sanitise
-    final_name = (
-        final_name
-        .replace("/", "_")
-        .replace("\\", "_")
-        .replace("..", "_")
-        .strip()
-    )
-
-    if not final_name:
+    if not final_name or final_name in ("_", ""):
         await update.message.reply_text("⚠️ Invalid filename. Please try again or /cancel.")
         return WAITING_FOR_NAME
 
@@ -165,10 +170,13 @@ async def receive_new_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 caption=f"✅ Here is your renamed file: `{final_name}`",
                 parse_mode="Markdown",
             )
-        logger.info("File renamed: %s → %s", original_name, final_name)
+        logger.info(
+            "Renamed: %s → %s (user=%s)",
+            original_name, final_name, update.effective_user.id,
+        )
 
     except Exception as e:
-        logger.error("Error during rename: %s", e)
+        logger.error("Error during rename (user=%s): %s", update.effective_user.id, e)
         await update.message.reply_text(
             "❌ Something went wrong while processing your file. Please try again."
         )
@@ -192,7 +200,16 @@ async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error("Unhandled error: %s", context.error)
+    logger.error("Unhandled error: %s", context.error, exc_info=context.error)
+
+    # Try to notify the user if we have an update
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ An unexpected error occurred. Please try again."
+            )
+        except Exception:
+            pass
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -207,9 +224,10 @@ def main() -> None:
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .connect_timeout(30)
-        .read_timeout(30)
-        .write_timeout(30)
+        .read_timeout(60)       # Increased: large files take longer
+        .write_timeout(60)      # Increased: uploading renamed file
         .pool_timeout(30)
+        .concurrent_updates(True)   # ← Key fix: handle multiple users simultaneously
         .build()
     )
 
@@ -231,8 +249,9 @@ def main() -> None:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True,
-        per_chat=True,
+        per_user=True,   # Each user has isolated state
+        per_chat=False,  # Don't isolate by chat — avoids group conflicts
+        per_message=False,
     )
 
     app.add_handler(CommandHandler("start", start))
@@ -241,11 +260,12 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text))
     app.add_error_handler(error_handler)
 
-    logger.info("Bot is running!")
+    logger.info("Bot is running with concurrent_updates=True!")
+
+    # Railway-safe polling (no close_loop=False)
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,  # ignore messages sent while bot was offline
-        close_loop=False,
+        drop_pending_updates=True,
     )
 
 
